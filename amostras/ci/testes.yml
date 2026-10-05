@@ -1,0 +1,64 @@
+name: Testes
+
+on:
+  push:
+    paths:
+      - "backend/**"
+      - "database/**"
+      - ".github/workflows/testes.yml"
+  pull_request:
+    paths:
+      - "backend/**"
+      - "database/**"
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: teste
+          POSTGRES_PASSWORD: teste
+          POSTGRES_DB: forno_teste
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U teste -d forno_teste"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements*.txt
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Testes (unidade, esquema SQL e integração com PostgreSQL real)
+        env:
+          DATABASE_URL_TESTE: postgresql://teste:teste@127.0.0.1:5432/forno_teste
+        run: python -m unittest discover -s . -v
+      - name: Migrações aplicam do zero e são idempotentes
+        env:
+          DATABASE_URL: postgresql://teste:teste@127.0.0.1:5432/forno_teste
+        run: |
+          python banco.py
+          python banco.py
+      - name: Servidor de produção (gunicorn) sobe e responde
+        env:
+          DATABASE_URL: postgresql://teste:teste@127.0.0.1:5432/forno_teste
+          JWT_SECRET: segredo-so-do-ci-com-mais-de-trinta-e-dois-bytes
+        run: |
+          gunicorn app:app --bind 127.0.0.1:8000 --workers 2 --daemon --pid gunicorn.pid
+          sleep 3
+          curl --fail --silent --show-error http://127.0.0.1:8000/api/saude
+          curl --fail --silent --show-error http://127.0.0.1:8000/api/produtos
+          kill "$(cat gunicorn.pid)"
